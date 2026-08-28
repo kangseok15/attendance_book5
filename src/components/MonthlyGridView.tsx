@@ -14,7 +14,6 @@ import {
 import { 
   getRecordKey, 
   isStudentExcluded, 
-  getStatusBadgeInfo,
   sortStudents
 } from '../utils/attendanceHelpers';
 import { 
@@ -25,10 +24,10 @@ import {
   XCircle, 
   AlertCircle, 
   ChevronLeft, 
-  ChevronRight,
-  Filter,
-  ArrowUpDown,
-  Search,
+  ChevronRight, 
+  Filter, 
+  ArrowUpDown, 
+  Search, 
   CheckCheck
 } from 'lucide-react';
 
@@ -140,6 +139,48 @@ export const MonthlyGridView: React.FC<MonthlyGridViewProps> = ({
       1: students.filter(s => s.grade === 1).length,
     };
   }, [students]);
+
+  // 배지 스타일 자체 렌더링 헬퍼
+  const getBadgeDetails = (status: AttendanceStatus, isExcluded: boolean) => {
+    if (isExcluded) {
+      return {
+        label: '학원',
+        icon: '학원',
+        bgClass: 'bg-slate-50 dark:bg-slate-800/40 text-slate-400 dark:text-slate-500',
+        textClass: 'text-slate-400 dark:text-slate-500 font-bold'
+      };
+    }
+    switch (status) {
+      case 'PRESENT':
+        return {
+          label: '출석',
+          icon: 'O',
+          bgClass: 'bg-emerald-50/70 dark:bg-emerald-950/40',
+          textClass: 'text-emerald-600 dark:text-emerald-400 font-black'
+        };
+      case 'EXCUSED':
+        return {
+          label: '인정',
+          icon: '인',
+          bgClass: 'bg-blue-50/70 dark:bg-blue-950/40',
+          textClass: 'text-blue-600 dark:text-blue-400 font-black'
+        };
+      case 'ABSENT':
+        return {
+          label: '결석',
+          icon: 'X',
+          bgClass: 'bg-rose-50/70 dark:bg-rose-950/40',
+          textClass: 'text-rose-600 dark:text-rose-400 font-black'
+        };
+      default:
+        return {
+          label: '미체크',
+          icon: '-',
+          bgClass: 'bg-transparent',
+          textClass: 'text-slate-200 dark:text-slate-800'
+        };
+    }
+  };
 
   return (
     <div className="space-y-4">
@@ -334,7 +375,7 @@ export const MonthlyGridView: React.FC<MonthlyGridViewProps> = ({
                       const key = getRecordKey(st.id, session, day.dateStr);
                       const rec = records[key];
                       const status = rec?.status || 'NONE';
-                      const badge = getStatusBadgeInfo(status, isExcluded);
+                      const badge = getBadgeDetails(status, isExcluded);
 
                       let tooltipText = `${st.name} (${day.dayNum}일) - ${badge.label}`;
                       if (rec?.checkInTime) {
