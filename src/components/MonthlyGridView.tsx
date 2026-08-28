@@ -16,7 +16,6 @@ import {
   isStudentExcluded, 
   getStatusBadgeInfo,
   calculateStudentMonthlyStats,
-  calculateDailySessionStats,
   sortStudents
 } from '../utils/attendanceHelpers';
 import { 
@@ -284,15 +283,16 @@ export const MonthlyGridView: React.FC<MonthlyGridViewProps> = ({
                   {selectedGrade === 'all' ? '전체 현원(출석)' : `${selectedGrade}학년 현원(출석)`}
                 </td>
                 {activeDays.map(day => {
-                  const dayStats = calculateDailySessionStats(
-                    students.filter(s => selectedGrade === 'all' || s.grade === selectedGrade),
-                    session,
-                    day.dateStr,
-                    records
-                  );
+                  const presentCount = students
+                    .filter(s => (selectedGrade === 'all' || s.grade === selectedGrade) && s.active && !isStudentExcluded(s, session, day.dateStr))
+                    .filter(s => {
+                      const k = getRecordKey(s.id, session, day.dateStr);
+                      return records[k]?.status === 'PRESENT';
+                    }).length;
+
                   return (
                     <td key={`sum_${day.dateStr}`} className="px-1 py-1.5 text-indigo-600 dark:text-indigo-400 border-r border-indigo-100 dark:border-indigo-900/50 font-black">
-                      {dayStats.presentCount}
+                      {presentCount}
                     </td>
                   );
                 })}
@@ -333,7 +333,6 @@ export const MonthlyGridView: React.FC<MonthlyGridViewProps> = ({
                       const status = rec?.status || 'NONE';
                       const badge = getStatusBadgeInfo(status, isExcluded);
 
-                      // 사유 및 체크인 시간 포함 툴팁 생성
                       let tooltipText = `${st.name} (${day.dayNum}일) - ${badge.label}`;
                       if (rec?.checkInTime) {
                         tooltipText += ` [체크 시간: ${rec.checkInTime}]`;
@@ -357,7 +356,6 @@ export const MonthlyGridView: React.FC<MonthlyGridViewProps> = ({
                             <span className={`font-black ${badge.textClass}`}>
                               {badge.icon}
                             </span>
-                            {/* 사유가 있을 경우 우측 상단에 작은 점 표시 */}
                             {rec?.reason && rec.reason.trim() !== '' && (
                               <span className="absolute -top-1 -right-1 w-1.5 h-1.5 bg-amber-500 rounded-full"></span>
                             )}
