@@ -15,7 +15,6 @@ import {
   getRecordKey, 
   isStudentExcluded, 
   getStatusBadgeInfo,
-  calculateStudentMonthlyStats,
   sortStudents
 } from '../utils/attendanceHelpers';
 import { 
@@ -302,7 +301,11 @@ export const MonthlyGridView: React.FC<MonthlyGridViewProps> = ({
 
             <tbody className="divide-y divide-slate-100 dark:divide-slate-800/60 font-medium">
               {filteredStudents.map((st, idx) => {
-                const stats = calculateStudentMonthlyStats(st, session, activeDays, records);
+                const presentCount = activeDays.filter(d => !isStudentExcluded(st, session, d.dateStr) && records[getRecordKey(st.id, session, d.dateStr)]?.status === 'PRESENT').length;
+                const absentCount = activeDays.filter(d => !isStudentExcluded(st, session, d.dateStr) && records[getRecordKey(st.id, session, d.dateStr)]?.status === 'ABSENT').length;
+                const totalApp = activeDays.filter(d => !isStudentExcluded(st, session, d.dateStr)).length;
+                const rate = totalApp > 0 ? Math.round((presentCount / totalApp) * 100) : 0;
+                const stats = { presentCount, absentCount, totalApplicableDays: totalApp, rate };
 
                 return (
                   <tr 
