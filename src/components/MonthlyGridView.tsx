@@ -2,7 +2,7 @@
  * @license
  * SPDX-License-Identifier: Apache-2.0
  */
-import React, { useState, useEffect, useMemo } from 'react';
+import React, { useState, useMemo } from 'react';
 import { 
   Student, 
   SessionType, 
@@ -13,35 +13,30 @@ import {
 } from '../types/attendance';
 import { 
   getRecordKey, 
-  isStudentExcluded 
+  isStudentExcluded, 
+  sortStudents
 } from '../utils/attendanceHelpers';
 import { 
-  playKioskSuccessSound, 
-  speakKioskMessage 
-} from '../utils/kioskSound';
-import { 
-  Search, 
+  Calendar, 
+  Clock, 
+  Users, 
   CheckCircle2, 
   XCircle, 
   AlertCircle, 
-  Clock, 
-  Users, 
-  Sparkles,
-  Volume2,
-  VolumeX,
-  LogOut,
-  MessageSquare,
-  Check,
-  X
+  ChevronLeft, 
+  ChevronRight, 
+  Filter, 
+  ArrowUpDown, 
+  Search, 
+  CheckCheck
 } from 'lucide-react';
 
-interface KioskAttendanceViewProps {
+interface MonthlyGridViewProps {
   students: Student[];
   session: SessionType;
-  setSession: (session: SessionType) => void;
+  year: number;
+  month: number;
   activeDays: DayConfig[];
-  selectedDateStr: string;
-  setSelectedDateStr: (dateStr: string) => void;
   records: Record<string, AttendanceRecord>;
   onUpdateRecord: (
     studentId: string, 
@@ -50,140 +45,50 @@ interface KioskAttendanceViewProps {
     reason?: string,
     checkInTime?: string
   ) => void;
+  onBatchUpdateDay: (
+    dateStr: string, 
+    status: AttendanceStatus, 
+    gradeFilter?: number
+  ) => void;
+  onFillDayAbsent: (dateStr: string, gradeFilter?: number) => void;
+  onUpdateStudents: (newStudents: Student[]) => void;
+  onSessionChange: (newSession: SessionType) => void;
+  onMonthChange: (newMonth: number) => void;
   userRole: UserRole;
-  onExitKiosk: () => void;
 }
 
-const PRESET_REASONS = [
-  '병원 진료',
-  '조퇴 (학원)',
-  '수행평가',
-  '가족 행사',
-  '컨디션 난조',
-  '학교 행사'
-];
-
-export const KioskAttendanceView: React.FC<KioskAttendanceViewProps> = ({
+export const MonthlyGridView: React.FC<MonthlyGridViewProps> = ({
   students,
   session,
-  selectedDateStr,
+  year,
+  month,
+  activeDays,
   records,
   onUpdateRecord,
-  onExitKiosk
+  onBatchUpdateDay,
+  onFillDayAbsent,
+  onUpdateStudents,
+  onSessionChange,
+  onMonthChange,
+  userRole
 }) => {
-  const [selectedGrade, setSelectedGrade] = useState<number>(3);
+  const [selectedGrade, setSelectedGrade] = useState<number | 'all'>('all');
   const [searchQuery, setSearchQuery] = useState('');
-  const [soundEnabled, setSoundEnabled] = useState(true);
-  
-  // 현재 시각 실시간 표시
-  const [currentTimeStr, setCurrentTimeStr] = useState('');
-  useEffect(() => {
-    const updateTime = () => {
-      const now = new Date();
-      setCurrentTimeStr(
-        now.toLocaleTimeString('ko-KR', { hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: false })
-      );
-    };
-    updateTime();
-    const interval = setInterval(updateTime, 1000);
-    return () => clearInterval(interval);
-  }, []);
-
-  // 모달 상태
-  const [activeModalStudent, setActiveModalStudent] = useState<Student | null>(null);
-  const [modalReason, setModalReason] = useState('');
-  const [isTypingReason, setIsTypingReason] = useState(false); // 사유 입력 중 여부 (타이머 일시정지)
-  const [autoCloseTimer, setAutoCloseTimer] = useState<number>(5);
-  const [lastCheckinToast, setLastCheckinToast] = useState<{
-    name: string;
-    status: AttendanceStatus;
-    time: string;
+  const [editingCell, setEditingCell] = useState<{
+    studentId: string;
+    studentName: string;
+    dateStr: string;
+    dayNum: number;
+    currentStatus: AttendanceStatus;
+    currentReason?: string;
   } | null>(null);
 
-  // 모달 자동 닫힘 카운트다운 (사유 입력 중일 때는 멈춤)
-  useEffect(() => {
-    if (!activeModalStudent) return;
-    if (isTypingReason) return;
+  const [inputReason, setInputReason] = useState('');
+  const isReadOnly = userRole === 'student';
 
-    const interval = setInterval(() => {
-      setAutoCloseTimer(prev => {
-        if (prev <= 1) {
-          handleCloseModal();
-          return 5;
-        }
-        return prev - 1;
-      });
-    }, 1000);
-
-    return () => clearInterval(interval);
-  }, [activeModalStudent, isTypingReason]);
-
-  const handleOpenStudentModal = (student: Student) => {
-    const isExcluded = isStudentExcluded(student, session, selectedDateStr);
-    if (isExcluded) return;
-
-    const key = getRecordKey(student.id, session, selectedDateStr);
-    const existing = records[key];
-    
-    setActiveModalStudent(student);
-    setModalReason(existing?.reason || '');
-    setIsTypingReason(false);
-    setAutoCloseTimer(5);
-  };
-
-  const handleCloseModal = () => {
-    setActiveModalStudent(null);
-    setModalReason('');
-    setIsTypingReason(false);
-  };
-
-  const handleCheckin = (status: AttendanceStatus) => {
-    if (!activeModalStudent) return;
-
-    const now = new Date();
-    const timeFormatted = `${String(now.getHours()).padStart(2, '0')}:${String(now.getMinutes()).padStart(2, '0')}`;
-    const cleanReason = modalReason.trim() === '' ? undefined : modalReason.trim();
-
-    onUpdateRecord(
-      activeModalStudent.id,
-      selectedDateStr,
-      status,
-      cleanReason,
-      timeFormatted
-    );
-
-    if (soundEnabled) {
-      playKioskSuccessSound();
-      const statusKorean = status === 'PRESENT' ? '출석 완료' : status === 'EXCUSED' ? '인정 처리' : '결석 처리';
-      speakKioskMessage(`${activeModalStudent.name} 학생, ${statusKorean} 되었습니다.`);
-    }
-
-    setLastCheckinToast({
-      name: activeModalStudent.name,
-      status,
-      time: timeFormatted
-    });
-
-    handleCloseModal();
-
-    setTimeout(() => {
-      setLastCheckinToast(null);
-    }, 4000);
-  };
-
-  const handleAddPresetReason = (reason: string) => {
-    setModalReason(prev => {
-      if (!prev || prev.trim() === '') return reason;
-      if (prev.includes(reason)) return prev;
-      return `${prev}, ${reason}`;
-    });
-    setIsTypingReason(true);
-  };
-
-  // 학년별 및 검색 필터링
   const filteredStudents = useMemo(() => {
     return students.filter(st => {
-      if (st.grade !== selectedGrade) return false;
+      if (selectedGrade !== 'all' && st.grade !== selectedGrade) return false;
       if (searchQuery.trim() !== '') {
         const q = searchQuery.toLowerCase().trim();
         const matchName = st.name.toLowerCase().includes(q);
@@ -194,14 +99,54 @@ export const KioskAttendanceView: React.FC<KioskAttendanceViewProps> = ({
     });
   }, [students, selectedGrade, searchQuery]);
 
-  // 배지 스타일 헬퍼
-  const getBadge = (status: AttendanceStatus, isExcluded: boolean) => {
+  const handleCellClick = (student: Student, dateStr: string, dayNum: number) => {
+    if (isReadOnly) return;
+    const isExcluded = isStudentExcluded(student, session, dateStr);
+    if (isExcluded) return;
+
+    const key = getRecordKey(student.id, session, dateStr);
+    const currentRec = records[key];
+    const currentStatus = currentRec?.status || 'NONE';
+    const currentReason = currentRec?.reason || '';
+
+    setEditingCell({
+      studentId: student.id,
+      studentName: student.name,
+      dateStr,
+      dayNum,
+      currentStatus,
+      currentReason
+    });
+    setInputReason(currentReason);
+  };
+
+  const handleSaveStatus = (status: AttendanceStatus) => {
+    if (!editingCell) return;
+    onUpdateRecord(
+      editingCell.studentId,
+      editingCell.dateStr,
+      status,
+      inputReason.trim() === '' ? undefined : inputReason.trim()
+    );
+    setEditingCell(null);
+  };
+
+  const gradeCounts = useMemo(() => {
+    return {
+      all: students.length,
+      3: students.filter(s => s.grade === 3).length,
+      2: students.filter(s => s.grade === 2).length,
+      1: students.filter(s => s.grade === 1).length,
+    };
+  }, [students]);
+
+  const getBadgeDetails = (status: AttendanceStatus, isExcluded: boolean) => {
     if (isExcluded) {
       return {
         label: '학원',
         icon: '학원',
-        bgClass: 'bg-slate-100 dark:bg-slate-800 text-slate-400',
-        textClass: 'text-slate-400'
+        bgClass: 'bg-slate-50 dark:bg-slate-800/40 text-slate-400 dark:text-slate-500',
+        textClass: 'text-slate-400 dark:text-slate-500 font-bold'
       };
     }
     switch (status) {
@@ -209,400 +154,354 @@ export const KioskAttendanceView: React.FC<KioskAttendanceViewProps> = ({
         return {
           label: '출석',
           icon: 'O',
-          bgClass: 'bg-emerald-100 dark:bg-emerald-950/60 text-emerald-700 dark:text-emerald-300',
-          textClass: 'text-emerald-600 dark:text-emerald-400'
+          bgClass: 'bg-emerald-50/70 dark:bg-emerald-950/40',
+          textClass: 'text-emerald-600 dark:text-emerald-400 font-black'
         };
       case 'EXCUSED':
         return {
           label: '인정',
           icon: '인',
-          bgClass: 'bg-blue-100 dark:bg-blue-950/60 text-blue-700 dark:text-blue-300',
-          textClass: 'text-blue-600 dark:text-blue-400'
+          bgClass: 'bg-blue-50/70 dark:bg-blue-950/40',
+          textClass: 'text-blue-600 dark:text-blue-400 font-black'
         };
       case 'ABSENT':
         return {
           label: '결석',
           icon: 'X',
-          bgClass: 'bg-rose-100 dark:bg-rose-950/60 text-rose-700 dark:text-rose-300',
-          textClass: 'text-rose-600 dark:text-rose-400'
+          bgClass: 'bg-rose-50/70 dark:bg-rose-950/40',
+          textClass: 'text-rose-600 dark:text-rose-400 font-black'
         };
       default:
         return {
           label: '미체크',
           icon: '-',
-          bgClass: 'bg-slate-100 dark:bg-slate-800 text-slate-400',
-          textClass: 'text-slate-400'
+          bgClass: 'bg-transparent',
+          textClass: 'text-slate-200 dark:text-slate-800'
         };
     }
   };
 
-  // 실시간 통계 자체 계산
-  const stats = useMemo(() => {
-    const applicable = students.filter(s => s.active && !isStudentExcluded(s, session, selectedDateStr));
-    let presentCount = 0;
-    let excusedCount = 0;
-    let absentCount = 0;
-    let noneCount = 0;
-
-    applicable.forEach(st => {
-      const key = getRecordKey(st.id, session, selectedDateStr);
-      const rec = records[key];
-      const status = rec?.status || 'NONE';
-      if (status === 'PRESENT') presentCount++;
-      else if (status === 'EXCUSED') excusedCount++;
-      else if (status === 'ABSENT') absentCount++;
-      else noneCount++;
-    });
-
-    return {
-      applicableCount: applicable.length,
-      presentCount,
-      excusedCount,
-      absentCount,
-      noneCount
-    };
-  }, [students, session, selectedDateStr, records]);
-
   return (
-    <div className="space-y-4 max-w-6xl mx-auto pb-12 select-none">
-      {/* Kiosk Header Bar */}
-      <div className="bg-gradient-to-r from-indigo-900 via-indigo-800 to-slate-900 text-white p-5 rounded-3xl shadow-xl flex flex-wrap items-center justify-between gap-4 border border-indigo-700/50">
-        <div className="flex items-center gap-4">
-          <div className="p-3 bg-white/10 backdrop-blur-md rounded-2xl border border-white/10 text-indigo-300">
-            <Sparkles className="w-7 h-7 animate-pulse" />
-          </div>
-          <div>
-            <div className="flex items-center gap-2">
-              <span className="text-xs font-black tracking-widest text-indigo-300 uppercase px-2.5 py-0.5 rounded-full bg-indigo-500/20 border border-indigo-400/30">
-                자습실 키오스크 모드
-              </span>
-              <span className="text-xs font-semibold text-slate-300">
-                {session === 'morning' ? '오전자습 (08:00~)' : '야간자습 (17:00~)'}
-              </span>
-            </div>
-            <h1 className="text-2xl font-black tracking-tight text-white mt-0.5">
-              학생 출석 셀프 체크인
-            </h1>
-          </div>
-        </div>
-
-        <div className="flex items-center gap-3">
-          <div className="text-right px-4 py-2 bg-black/25 backdrop-blur-md rounded-2xl border border-white/10">
-            <div className="text-[11px] font-semibold text-indigo-200">현재 시각</div>
-            <div className="text-xl font-black font-mono tracking-wider text-emerald-400">
-              {currentTimeStr}
-            </div>
-          </div>
-
-          <button
-            onClick={() => setSoundEnabled(!soundEnabled)}
-            className={`p-3 rounded-2xl border transition-all ${
-              soundEnabled
-                ? 'bg-emerald-500/20 border-emerald-400/40 text-emerald-300 hover:bg-emerald-500/30'
-                : 'bg-white/10 border-white/10 text-slate-400 hover:bg-white/20'
-            }`}
-            title={soundEnabled ? '음성 피드백 켜짐' : '음성 피드백 꺼짐'}
-          >
-            {soundEnabled ? <Volume2 className="w-5 h-5" /> : <VolumeX className="w-5 h-5" />}
-          </button>
-
-          <button
-            onClick={onExitKiosk}
-            className="flex items-center gap-1.5 px-4 py-3 bg-white/10 hover:bg-white/20 active:scale-95 text-white font-bold text-xs rounded-2xl border border-white/15 transition-all"
-          >
-            <LogOut className="w-4 h-4" />
-            <span>키오스크 종료</span>
-          </button>
-        </div>
-      </div>
-
-      {/* Realtime Attendance Progress */}
-      <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
-        <div className="bg-white dark:bg-slate-900 p-4 rounded-2xl border border-slate-200 dark:border-slate-800 shadow-sm flex items-center gap-3">
-          <div className="w-10 h-10 rounded-xl bg-indigo-50 dark:bg-indigo-950/60 text-indigo-600 dark:text-indigo-400 flex items-center justify-center font-black">
-            <Users className="w-5 h-5" />
-          </div>
-          <div>
-            <div className="text-[11px] font-bold text-slate-400">전체 대상자</div>
-            <div className="text-xl font-black text-slate-900 dark:text-slate-100">
-              {stats.applicableCount}명
-            </div>
-          </div>
-        </div>
-
-        <div className="bg-white dark:bg-slate-900 p-4 rounded-2xl border border-slate-200 dark:border-slate-800 shadow-sm flex items-center gap-3">
-          <div className="w-10 h-10 rounded-xl bg-emerald-50 dark:bg-emerald-950/60 text-emerald-600 dark:text-emerald-400 flex items-center justify-center font-black">
-            <CheckCircle2 className="w-5 h-5" />
-          </div>
-          <div>
-            <div className="text-[11px] font-bold text-slate-400">출석 완료</div>
-            <div className="text-xl font-black text-emerald-600 dark:text-emerald-400">
-              {stats.presentCount}명
-            </div>
-          </div>
-        </div>
-
-        <div className="bg-white dark:bg-slate-900 p-4 rounded-2xl border border-slate-200 dark:border-slate-800 shadow-sm flex items-center gap-3">
-          <div className="w-10 h-10 rounded-xl bg-blue-50 dark:bg-blue-950/60 text-blue-600 dark:text-blue-400 flex items-center justify-center font-black">
-            <AlertCircle className="w-5 h-5" />
-          </div>
-          <div>
-            <div className="text-[11px] font-bold text-slate-400">인정 / 사유</div>
-            <div className="text-xl font-black text-blue-600 dark:text-blue-400">
-              {stats.excusedCount}명
-            </div>
-          </div>
-        </div>
-
-        <div className="bg-white dark:bg-slate-900 p-4 rounded-2xl border border-slate-200 dark:border-slate-800 shadow-sm flex items-center gap-3">
-          <div className="w-10 h-10 rounded-xl bg-rose-50 dark:bg-rose-950/60 text-rose-600 dark:text-rose-400 flex items-center justify-center font-black">
-            <Clock className="w-5 h-5" />
-          </div>
-          <div>
-            <div className="text-[11px] font-bold text-slate-400">미체크 / 결석</div>
-            <div className="text-xl font-black text-rose-600 dark:text-rose-400">
-              {stats.absentCount + stats.noneCount}명
-            </div>
-          </div>
-        </div>
-      </div>
-
-      {/* Grade Selector & Search Filter */}
-      <div className="bg-white dark:bg-slate-900 p-3 rounded-2xl border border-slate-200 dark:border-slate-800 shadow-sm flex flex-wrap items-center justify-between gap-3">
-        <div className="flex items-center gap-2">
-          {[3, 2, 1].map((gradeNum) => {
-            const gradeStudentCount = students.filter(s => s.grade === gradeNum).length;
-            const isSel = selectedGrade === gradeNum;
-            return (
-              <button
-                key={gradeNum}
-                onClick={() => {
-                  setSelectedGrade(gradeNum);
-                  setSearchQuery('');
-                }}
-                className={`px-6 py-3 rounded-2xl font-black text-base transition-all flex items-center gap-2 ${
-                  isSel
-                    ? 'bg-indigo-600 text-white shadow-lg shadow-indigo-600/30 scale-105'
-                    : 'bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-400 hover:bg-slate-200 dark:hover:bg-slate-700'
-                }`}
-              >
-                <span>{gradeNum}학년</span>
-                <span className={`text-xs px-2 py-0.5 rounded-full ${
-                  isSel ? 'bg-white/20 text-white' : 'bg-slate-200 dark:bg-slate-700 text-slate-600 dark:text-slate-300'
-                }`}>
-                  {gradeStudentCount}명
-                </span>
-              </button>
-            );
-          })}
-        </div>
-
-        <div className="relative flex-1 max-w-xs min-w-[200px]">
-          <Search className="w-5 h-5 absolute left-3.5 top-1/2 -translate-y-1/2 text-slate-400" />
-          <input
-            type="text"
-            placeholder="이름 또는 학번 검색..."
-            value={searchQuery}
-            onChange={(e) => setSearchQuery(e.target.value)}
-            className="w-full pl-11 pr-4 py-3 bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-2xl text-sm font-bold focus:outline-none focus:ring-2 focus:ring-indigo-500"
-          />
-        </div>
-      </div>
-
-      {/* Student Cards Grid */}
-      <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 gap-3.5">
-        {filteredStudents.map((st) => {
-          const isExcluded = isStudentExcluded(st, session, selectedDateStr);
-          const key = getRecordKey(st.id, session, selectedDateStr);
-          const rec = records[key];
-          const status = rec?.status || 'NONE';
-          const badge = getBadge(status, isExcluded);
-
-          const isChecked = status === 'PRESENT' || status === 'EXCUSED';
-
-          return (
+    <div className="space-y-4">
+      {/* Top Filter & Toolbar */}
+      <div className="flex flex-wrap items-center justify-between gap-3 bg-white dark:bg-slate-900 p-4 rounded-2xl border border-slate-200 dark:border-slate-800 shadow-sm">
+        <div className="flex flex-wrap items-center gap-2">
+          <div className="flex items-center bg-slate-100 dark:bg-slate-800 p-1 rounded-xl">
             <button
-              key={st.id}
-              disabled={isExcluded}
-              onClick={() => handleOpenStudentModal(st)}
-              className={`relative p-4 rounded-3xl border-2 transition-all flex flex-col justify-between text-left min-h-[120px] ${
-                isExcluded
-                  ? 'bg-slate-100/70 dark:bg-slate-800/30 border-dashed border-slate-200 dark:border-slate-800 opacity-60 cursor-not-allowed'
-                  : isChecked
-                  ? 'bg-emerald-50/70 dark:bg-emerald-950/30 border-emerald-500 shadow-md shadow-emerald-500/10 hover:border-emerald-600 active:scale-95'
-                  : 'bg-white dark:bg-slate-900 border-slate-200 dark:border-slate-800 hover:border-indigo-400 hover:shadow-lg hover:scale-[1.02] active:scale-95'
+              onClick={() => setSelectedGrade('all')}
+              className={`px-3 py-1.5 rounded-lg text-xs font-bold transition-all ${
+                selectedGrade === 'all'
+                  ? 'bg-white dark:bg-slate-700 text-indigo-600 dark:text-indigo-400 shadow-sm'
+                  : 'text-slate-600 dark:text-slate-400 hover:text-slate-900'
               }`}
             >
-              <div className="flex items-center justify-between w-full">
-                <span className="text-xs font-black text-slate-400 dark:text-slate-500">
-                  {st.grade}학년 {st.classNum}반 {st.number}번
-                </span>
-                {rec?.checkInTime && (
-                  <span className="text-[10px] font-bold font-mono px-2 py-0.5 rounded-full bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-300">
-                    {rec.checkInTime}
-                  </span>
-                )}
-              </div>
-
-              <div className="my-1">
-                <span className={`text-xl font-black tracking-tight ${
-                  isExcluded ? 'text-slate-400' : 'text-slate-900 dark:text-slate-100'
-                }`}>
-                  {st.name}
-                </span>
-              </div>
-
-              <div className="flex items-center justify-between w-full mt-1">
-                <span className={`inline-flex items-center gap-1 text-xs font-black px-2.5 py-1 rounded-xl ${badge.bgClass} ${badge.textClass}`}>
-                  {badge.icon} {badge.label}
-                </span>
-
-                {rec?.reason && rec.reason.trim() !== '' && (
-                  <span className="text-[10px] font-bold text-amber-600 dark:text-amber-400 truncate max-w-[80px]">
-                    💬 {rec.reason}
-                  </span>
-                )}
-              </div>
+              전체 ({gradeCounts.all})
             </button>
-          );
-        })}
+            <button
+              onClick={() => setSelectedGrade(3)}
+              className={`px-3 py-1.5 rounded-lg text-xs font-bold transition-all ${
+                selectedGrade === 3
+                  ? 'bg-white dark:bg-slate-700 text-indigo-600 dark:text-indigo-400 shadow-sm'
+                  : 'text-slate-600 dark:text-slate-400 hover:text-slate-900'
+              }`}
+            >
+              3학년 ({gradeCounts[3]})
+            </button>
+            <button
+              onClick={() => setSelectedGrade(2)}
+              className={`px-3 py-1.5 rounded-lg text-xs font-bold transition-all ${
+                selectedGrade === 2
+                  ? 'bg-white dark:bg-slate-700 text-indigo-600 dark:text-indigo-400 shadow-sm'
+                  : 'text-slate-600 dark:text-slate-400 hover:text-slate-900'
+              }`}
+            >
+              2학년 ({gradeCounts[2]})
+            </button>
+            <button
+              onClick={() => setSelectedGrade(1)}
+              className={`px-3 py-1.5 rounded-lg text-xs font-bold transition-all ${
+                selectedGrade === 1
+                  ? 'bg-white dark:bg-slate-700 text-indigo-600 dark:text-indigo-400 shadow-sm'
+                  : 'text-slate-600 dark:text-slate-400 hover:text-slate-900'
+              }`}
+            >
+              1학년 ({gradeCounts[1]})
+            </button>
+          </div>
+
+          <div className="relative">
+            <Search className="w-3.5 h-3.5 absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" />
+            <input
+              type="text"
+              placeholder="학생 이름 / 학번 검색..."
+              value={searchQuery}
+              onChange={(e) => setSearchQuery(e.target.value)}
+              className="pl-8 pr-3 py-1.5 text-xs bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl focus:outline-none focus:ring-2 focus:ring-indigo-500/20 w-44"
+            />
+          </div>
+        </div>
+
+        <div className="flex items-center gap-2">
+          <div className="flex items-center gap-1.5 text-xs font-medium text-slate-500 bg-slate-50 dark:bg-slate-800 px-3 py-1.5 rounded-xl border border-slate-200/60 dark:border-slate-700/60">
+            <span className="flex items-center gap-1">
+              <span className="w-2 h-2 rounded-full bg-emerald-500"></span> 출석(O)
+            </span>
+            <span className="text-slate-300 dark:text-slate-600">|</span>
+            <span className="flex items-center gap-1">
+              <span className="w-2 h-2 rounded-full bg-blue-500"></span> 인정(인)
+            </span>
+            <span className="text-slate-300 dark:text-slate-600">|</span>
+            <span className="flex items-center gap-1">
+              <span className="w-2 h-2 rounded-full bg-rose-500"></span> 결석(X)
+            </span>
+            <span className="text-slate-300 dark:text-slate-600">|</span>
+            <span className="flex items-center gap-1">
+              <span className="w-2 h-2 rounded-full bg-slate-400"></span> 학원
+            </span>
+          </div>
+        </div>
       </div>
 
-      {/* Interactive Check-in Modal */}
-      {activeModalStudent && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-950/80 backdrop-blur-md animate-in fade-in">
-          <div className="bg-white dark:bg-slate-900 rounded-[32px] p-7 max-w-lg w-full shadow-2xl border border-slate-200 dark:border-slate-800 space-y-6 animate-in zoom-in-95">
-            <div className="flex items-center justify-between">
-              <div className="flex items-center gap-2">
-                <span className="px-3 py-1 bg-indigo-50 dark:bg-indigo-950/80 text-indigo-600 dark:text-indigo-400 font-black text-xs rounded-full">
-                  {activeModalStudent.grade}학년 {activeModalStudent.classNum}반 {activeModalStudent.number}번
-                </span>
-                <span className="text-xs font-bold text-slate-400">
-                  {session === 'morning' ? '오전자습' : '야간자습'}
-                </span>
-              </div>
+      {/* Main Grid Table */}
+      <div className="bg-white dark:bg-slate-900 rounded-2xl border border-slate-200 dark:border-slate-800 shadow-sm overflow-hidden">
+        <div className="overflow-x-auto max-h-[calc(100vh-280px)] overflow-y-auto">
+          <table className="w-full text-center border-collapse text-xs select-none">
+            <thead className="sticky top-0 z-20 bg-slate-50/95 dark:bg-slate-900/95 backdrop-blur-sm border-b border-slate-200 dark:border-slate-800">
+              <tr>
+                <th className="sticky left-0 z-30 bg-slate-100 dark:bg-slate-800 px-2 py-2.5 font-bold text-slate-700 dark:text-slate-300 border-r border-slate-200 dark:border-slate-700 min-w-[32px]">
+                  #
+                </th>
+                <th className="sticky left-[32px] z-30 bg-slate-100 dark:bg-slate-800 px-2 py-2.5 font-bold text-slate-700 dark:text-slate-300 border-r border-slate-200 dark:border-slate-700 min-w-[32px]">
+                  학년
+                </th>
+                <th className="sticky left-[64px] z-30 bg-slate-100 dark:bg-slate-800 px-2 py-2.5 font-bold text-slate-700 dark:text-slate-300 border-r border-slate-200 dark:border-slate-700 min-w-[32px]">
+                  반
+                </th>
+                <th className="sticky left-[96px] z-30 bg-slate-100 dark:bg-slate-800 px-2 py-2.5 font-bold text-slate-700 dark:text-slate-300 border-r border-slate-200 dark:border-slate-700 min-w-[32px]">
+                  번호
+                </th>
+                <th className="sticky left-[128px] z-30 bg-slate-100 dark:bg-slate-800 px-3 py-2.5 font-bold text-slate-700 dark:text-slate-300 border-r border-slate-200 dark:border-slate-700 min-w-[70px]">
+                  이름
+                </th>
 
-              <div className="flex items-center gap-2">
-                {isTypingReason ? (
-                  <span className="text-xs font-bold text-amber-600 dark:text-amber-400 bg-amber-50 dark:bg-amber-950/80 px-2.5 py-1 rounded-full animate-pulse">
-                    입력 중 (타이머 일시정지)
-                  </span>
-                ) : (
-                  <span className="text-xs font-bold text-slate-400 bg-slate-100 dark:bg-slate-800 px-2.5 py-1 rounded-full">
-                    {autoCloseTimer}초 후 자동 닫힘
-                  </span>
-                )}
-                <button
-                  onClick={handleCloseModal}
-                  className="p-1.5 rounded-full text-slate-400 hover:bg-slate-100 dark:hover:bg-slate-800"
-                >
-                  <X className="w-5 h-5" />
-                </button>
-              </div>
+                {/* Day Columns */}
+                {activeDays.map((day) => (
+                  <th
+                    key={day.dateStr}
+                    className="px-2 py-2 font-bold border-r border-slate-200 dark:border-slate-800 min-w-[42px]"
+                  >
+                    <div className="flex flex-col items-center">
+                      <span className="text-[13px] font-black text-slate-800 dark:text-slate-200">
+                        {day.dayNum}
+                      </span>
+                      <span className={`text-[10px] font-medium ${
+                        day.dayOfWeek === '토' ? 'text-blue-500' :
+                        day.dayOfWeek === '일' ? 'text-rose-500' : 'text-slate-400'
+                      }`}>
+                        {day.dayOfWeek}
+                      </span>
+                    </div>
+                  </th>
+                ))}
+
+                {/* Stats Header */}
+                <th className="px-2 py-2.5 font-bold text-emerald-600 dark:text-emerald-400 border-r border-slate-200 dark:border-slate-800 min-w-[36px]">
+                  출석
+                </th>
+                <th className="px-2 py-2.5 font-bold text-rose-600 dark:text-rose-400 border-r border-slate-200 dark:border-slate-800 min-w-[36px]">
+                  결석
+                </th>
+                <th className="px-2 py-2.5 font-bold text-indigo-600 dark:text-indigo-400 min-w-[46px]">
+                  출석률
+                </th>
+              </tr>
+
+              {/* Summary Row for Daily Totals */}
+              <tr className="bg-indigo-50/70 dark:bg-indigo-950/40 border-b border-indigo-100 dark:border-indigo-900/50 font-bold">
+                <td colSpan={5} className="sticky left-0 z-30 bg-indigo-50/90 dark:bg-indigo-950/90 px-3 py-1.5 text-left text-indigo-700 dark:text-indigo-300 border-r border-indigo-100 dark:border-indigo-900/50">
+                  {selectedGrade === 'all' ? '전체 현원(출석)' : `${selectedGrade}학년 현원(출석)`}
+                </td>
+                {activeDays.map(day => {
+                  const presentCount = students
+                    .filter(s => (selectedGrade === 'all' || s.grade === selectedGrade) && s.active && !isStudentExcluded(s, session, day.dateStr))
+                    .filter(s => {
+                      const k = getRecordKey(s.id, session, day.dateStr);
+                      return records[k]?.status === 'PRESENT';
+                    }).length;
+
+                  return (
+                    <td key={`sum_${day.dateStr}`} className="px-1 py-1.5 text-indigo-600 dark:text-indigo-400 border-r border-indigo-100 dark:border-indigo-900/50 font-black">
+                      {presentCount}
+                    </td>
+                  );
+                })}
+                <td colSpan={3} className="bg-indigo-50/90 dark:bg-indigo-950/90"></td>
+              </tr>
+            </thead>
+
+            <tbody className="divide-y divide-slate-100 dark:divide-slate-800/60 font-medium">
+              {filteredStudents.map((st, idx) => {
+                const presentCount = activeDays.filter(d => !isStudentExcluded(st, session, d.dateStr) && records[getRecordKey(st.id, session, d.dateStr)]?.status === 'PRESENT').length;
+                const absentCount = activeDays.filter(d => !isStudentExcluded(st, session, d.dateStr) && records[getRecordKey(st.id, session, d.dateStr)]?.status === 'ABSENT').length;
+                const totalApp = activeDays.filter(d => !isStudentExcluded(st, session, d.dateStr)).length;
+                const rate = totalApp > 0 ? Math.round((presentCount / totalApp) * 100) : 0;
+                const stats = { presentCount, absentCount, totalApplicableDays: totalApp, rate };
+
+                return (
+                  <tr 
+                    key={st.id}
+                    className="hover:bg-slate-50/80 dark:hover:bg-slate-800/40 transition-colors"
+                  >
+                    <td className="sticky left-0 z-10 bg-white dark:bg-slate-900 px-1 py-2 text-slate-400 border-r border-slate-100 dark:border-slate-800">
+                      {idx + 1}
+                    </td>
+                    <td className="sticky left-[32px] z-10 bg-white dark:bg-slate-900 px-1 py-2 text-slate-700 dark:text-slate-300 border-r border-slate-100 dark:border-slate-800 font-bold">
+                      {st.grade}
+                    </td>
+                    <td className="sticky left-[64px] z-10 bg-white dark:bg-slate-900 px-1 py-2 text-slate-700 dark:text-slate-300 border-r border-slate-100 dark:border-slate-800">
+                      {st.classNum}
+                    </td>
+                    <td className="sticky left-[96px] z-10 bg-white dark:bg-slate-900 px-1 py-2 text-slate-700 dark:text-slate-300 border-r border-slate-100 dark:border-slate-800">
+                      {st.number}
+                    </td>
+                    <td className="sticky left-[128px] z-10 bg-white dark:bg-slate-900 px-2 py-2 text-slate-900 dark:text-slate-100 font-bold border-r border-slate-200 dark:border-slate-700 whitespace-nowrap">
+                      {st.name}
+                    </td>
+
+                    {/* Day Cells */}
+                    {activeDays.map(day => {
+                      const isExcluded = isStudentExcluded(st, session, day.dateStr);
+                      const key = getRecordKey(st.id, session, day.dateStr);
+                      const rec = records[key];
+                      const status = rec?.status || 'NONE';
+                      const badge = getBadgeDetails(status, isExcluded);
+
+                      let tooltipText = `${st.name} (${day.dayNum}일) - ${badge.label}`;
+                      if (rec?.checkInTime) {
+                        tooltipText += ` [체크 시간: ${rec.checkInTime}]`;
+                      }
+                      if (rec?.reason && rec.reason.trim() !== '') {
+                        tooltipText += ` [사유: ${rec.reason}]`;
+                      }
+
+                      return (
+                        <td
+                          key={day.dateStr}
+                          onClick={() => handleCellClick(st, day.dateStr, day.dayNum)}
+                          title={tooltipText}
+                          className={`px-1 py-2 border-r border-slate-100 dark:border-slate-800 transition-all ${
+                            isExcluded
+                              ? 'bg-slate-50/60 dark:bg-slate-800/20 text-slate-300 dark:text-slate-600'
+                              : 'cursor-pointer hover:bg-indigo-50/50 dark:hover:bg-indigo-950/30'
+                          } ${badge.bgClass}`}
+                        >
+                          <div className="relative inline-flex items-center justify-center min-w-[24px]">
+                            <span className={`font-black ${badge.textClass}`}>
+                              {badge.icon}
+                            </span>
+                            {rec?.reason && rec.reason.trim() !== '' && (
+                              <span className="absolute -top-1 -right-1 w-1.5 h-1.5 bg-amber-500 rounded-full"></span>
+                            )}
+                          </div>
+                        </td>
+                      );
+                    })}
+
+                    {/* Monthly Student Stats */}
+                    <td className="px-1 py-2 font-bold text-emerald-600 dark:text-emerald-400 border-r border-slate-100 dark:border-slate-800">
+                      {stats.presentCount}
+                    </td>
+                    <td className="px-1 py-2 font-bold text-rose-600 dark:text-rose-400 border-r border-slate-100 dark:border-slate-800">
+                      {stats.absentCount}
+                    </td>
+                    <td className="px-1 py-2 font-bold text-indigo-600 dark:text-indigo-400">
+                      {stats.totalApplicableDays > 0 ? `${stats.rate}%` : '-'}
+                    </td>
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
+        </div>
+      </div>
+
+      {/* Edit Status Modal */}
+      {editingCell && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/60 backdrop-blur-sm animate-in fade-in">
+          <div className="bg-white dark:bg-slate-900 rounded-3xl p-6 max-w-sm w-full shadow-2xl border border-slate-200 dark:border-slate-800 space-y-5">
+            <div className="text-center space-y-1">
+              <span className="text-xs font-bold text-indigo-600 dark:text-indigo-400 bg-indigo-50 dark:bg-indigo-950/80 px-2.5 py-1 rounded-full">
+                {editingCell.dayNum}일 ({session === 'morning' ? '오전자습' : '야간자습'})
+              </span>
+              <h3 className="text-lg font-black text-slate-900 dark:text-slate-100">
+                {editingCell.studentName} 출석 상태 변경
+              </h3>
             </div>
 
-            <div className="text-center py-2">
-              <h2 className="text-3xl font-black text-slate-900 dark:text-slate-100">
-                {activeModalStudent.name}
-              </h2>
-              <p className="text-xs font-bold text-slate-400 mt-1">
-                원하시는 출석 상태 버튼을 터치해 주세요.
-              </p>
-            </div>
-
-            <div className="grid grid-cols-3 gap-3">
+            <div className="grid grid-cols-3 gap-2">
               <button
-                onClick={() => handleCheckin('PRESENT')}
-                className="flex flex-col items-center justify-center gap-2 p-4 rounded-2xl bg-emerald-500 hover:bg-emerald-600 active:scale-95 text-white font-black shadow-lg shadow-emerald-500/25 transition-all"
+                onClick={() => handleSaveStatus('PRESENT')}
+                className={`flex flex-col items-center justify-center gap-1.5 p-3 rounded-2xl border font-bold text-xs transition-all ${
+                  editingCell.currentStatus === 'PRESENT'
+                    ? 'border-emerald-500 bg-emerald-50 dark:bg-emerald-950/60 text-emerald-700 dark:text-emerald-300 ring-2 ring-emerald-500/20'
+                    : 'border-slate-200 dark:border-slate-700 hover:border-emerald-300 hover:bg-emerald-50/50'
+                }`}
               >
-                <CheckCircle2 className="w-8 h-8" />
-                <span className="text-sm">출석 (O)</span>
+                <CheckCircle2 className="w-5 h-5 text-emerald-500" />
+                <span>출석 (O)</span>
               </button>
 
               <button
-                onClick={() => handleCheckin('EXCUSED')}
-                className="flex flex-col items-center justify-center gap-2 p-4 rounded-2xl bg-blue-500 hover:bg-blue-600 active:scale-95 text-white font-black shadow-lg shadow-blue-500/25 transition-all"
+                onClick={() => handleSaveStatus('EXCUSED')}
+                className={`flex flex-col items-center justify-center gap-1.5 p-3 rounded-2xl border font-bold text-xs transition-all ${
+                  editingCell.currentStatus === 'EXCUSED'
+                    ? 'border-blue-500 bg-blue-50 dark:bg-blue-950/60 text-blue-700 dark:text-blue-300 ring-2 ring-blue-500/20'
+                    : 'border-slate-200 dark:border-slate-700 hover:border-blue-300 hover:bg-blue-50/50'
+                }`}
               >
-                <AlertCircle className="w-8 h-8" />
-                <span className="text-sm">인정 (인)</span>
+                <AlertCircle className="w-5 h-5 text-blue-500" />
+                <span>인정 (인)</span>
               </button>
 
               <button
-                onClick={() => handleCheckin('ABSENT')}
-                className="flex flex-col items-center justify-center gap-2 p-4 rounded-2xl bg-rose-500 hover:bg-rose-600 active:scale-95 text-white font-black shadow-lg shadow-rose-500/25 transition-all"
+                onClick={() => handleSaveStatus('ABSENT')}
+                className={`flex flex-col items-center justify-center gap-1.5 p-3 rounded-2xl border font-bold text-xs transition-all ${
+                  editingCell.currentStatus === 'ABSENT'
+                    ? 'border-rose-500 bg-rose-50 dark:bg-rose-950/60 text-rose-700 dark:text-rose-300 ring-2 ring-rose-500/20'
+                    : 'border-slate-200 dark:border-slate-700 hover:border-rose-300 hover:bg-rose-50/50'
+                }`}
               >
-                <XCircle className="w-8 h-8" />
-                <span className="text-sm">결석 (X)</span>
+                <XCircle className="w-5 h-5 text-rose-500" />
+                <span>결석 (X)</span>
               </button>
             </div>
 
-            <div className="space-y-2 pt-2 border-t border-slate-100 dark:border-slate-800">
-              <div className="flex items-center justify-between text-xs font-bold text-slate-700 dark:text-slate-300">
-                <span className="flex items-center gap-1.5">
-                  <MessageSquare className="w-3.5 h-3.5 text-indigo-500" />
-                  사유 및 특이사항 입력
-                </span>
-                <span className="text-[11px] font-normal text-slate-400">
-                  (클릭하여 선택 또는 직접 입력)
-                </span>
-              </div>
-
+            <div className="space-y-1.5">
+              <label className="text-xs font-bold text-slate-700 dark:text-slate-300">
+                사유 및 비고 입력
+              </label>
               <input
                 type="text"
-                placeholder="예: 병원 진료, 조퇴(학원), 보강, 학교 행사..."
-                value={modalReason}
-                onFocus={() => setIsTypingReason(true)}
-                onChange={(e) => {
-                  setModalReason(e.target.value);
-                  setIsTypingReason(true);
-                }}
-                className="w-full px-4 py-3 bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-2xl text-xs font-bold focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                placeholder="예: 병원 진료, 수행평가 등"
+                value={inputReason}
+                onChange={(e) => setInputReason(e.target.value)}
+                className="w-full px-3.5 py-2.5 bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl text-xs focus:outline-none focus:ring-2 focus:ring-indigo-500/20 font-medium"
               />
-
-              <div className="flex flex-wrap gap-1.5 pt-1">
-                {PRESET_REASONS.map((preset) => (
-                  <button
-                    key={preset}
-                    type="button"
-                    onClick={() => handleAddPresetReason(preset)}
-                    className="px-3 py-1.5 bg-slate-100 dark:bg-slate-800 hover:bg-indigo-50 dark:hover:bg-indigo-950/50 hover:text-indigo-600 text-slate-600 dark:text-slate-300 rounded-xl text-xs font-bold transition-all border border-slate-200/60 dark:border-slate-700/60"
-                  >
-                    +{preset}
-                  </button>
-                ))}
-              </div>
             </div>
 
-            <div className="flex gap-2 pt-2">
+            <div className="flex gap-2">
               <button
-                onClick={() => handleCheckin('NONE')}
-                className="flex-1 py-3 bg-slate-100 dark:bg-slate-800 hover:bg-slate-200 text-slate-600 dark:text-slate-300 font-bold text-xs rounded-xl"
+                onClick={() => handleSaveStatus('NONE')}
+                className="flex-1 py-2.5 rounded-xl border border-slate-200 dark:border-slate-700 text-slate-500 hover:bg-slate-50 dark:hover:bg-slate-800 text-xs font-bold"
               >
-                체크 초기화
+                기록 초기화
               </button>
               <button
-                onClick={handleCloseModal}
-                className="flex-1 py-3 bg-slate-900 hover:bg-slate-800 text-white font-bold text-xs rounded-xl shadow-md"
+                onClick={() => setEditingCell(null)}
+                className="flex-1 py-2.5 rounded-xl bg-slate-900 hover:bg-slate-800 dark:bg-slate-100 dark:hover:bg-white text-white dark:text-slate-900 text-xs font-bold shadow-sm"
               >
                 닫기
               </button>
-            </div>
-          </div>
-        </div>
-      )}
-
-      {/* Floating Success Toast */}
-      {lastCheckinToast && (
-        <div className="fixed bottom-8 left-1/2 -translate-x-1/2 z-50 bg-slate-900/95 text-white px-6 py-3.5 rounded-2xl shadow-2xl border border-slate-700 flex items-center gap-3 backdrop-blur-md animate-in slide-in-from-bottom-5">
-          <div className="w-8 h-8 rounded-full bg-emerald-500 text-white flex items-center justify-center font-bold">
-            <Check className="w-5 h-5" />
-          </div>
-          <div>
-            <div className="text-sm font-black">
-              {lastCheckinToast.name} 학생 체크 완료!
-            </div>
-            <div className="text-xs text-slate-400 font-mono">
-              시간: {lastCheckinToast.time} | 상태: {lastCheckinToast.status === 'PRESENT' ? '출석' : lastCheckinToast.status === 'EXCUSED' ? '인정' : '결석'}
             </div>
           </div>
         </div>
