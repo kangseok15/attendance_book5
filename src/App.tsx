@@ -46,6 +46,20 @@ import {
 import { doc, onSnapshot, setDoc } from 'firebase/firestore';
 import { db } from './utils/firebase';
 
+// Firebase 직렬화 헬퍼 (undefined 값을 안전하게 제거)
+const sanitizeForFirestore = (record: AttendanceRecord): Record<string, any> => {
+  const sanitized: Record<string, any> = {
+    status: record.status
+  };
+  if (record.reason !== undefined && record.reason !== null) {
+    sanitized.reason = record.reason;
+  }
+  if (record.checkInTime !== undefined && record.checkInTime !== null) {
+    sanitized.checkInTime = record.checkInTime;
+  }
+  return sanitized;
+};
+
 export default function App() {
   const getInitialRole = (): UserRole => {
     if (typeof window !== 'undefined') {
@@ -177,7 +191,7 @@ export default function App() {
     loadAttendanceRecords()
   );
 
-  // Firestore 실시간 동기화 리스너 (학생 명단 + 월별 출석부)
+  // Firestore 실시간 리스너 (학생 명단 + 출석 기록)
   useEffect(() => {
     const unsubStudents = onSnapshot(doc(db, 'attendance', 'students'), (docSnap) => {
       if (docSnap.exists()) {
@@ -310,7 +324,7 @@ export default function App() {
     }
   };
 
-  // 단일 출석 변경 및 Firestore 전송
+  // 단일 출석 변경 (undefined 방지 처리 완료)
   const handleUpdateRecord = async (
     studentId: string,
     dateStr: string,
@@ -343,16 +357,17 @@ export default function App() {
     setRecords(newRecords);
     saveAttendanceRecords(newRecords);
 
-    // Firestore에 즉시 반영
+    // Firestore 저장 시 undefined 필드를 안전하게 필터링하여 저장
     const monthKey = `records_${year}_${String(month).padStart(2, '0')}`;
     try {
-      await setDoc(doc(db, 'attendance', monthKey), { [key]: updatedRecord }, { merge: true });
+      const firestoreSafeData = sanitizeForFirestore(updatedRecord);
+      await setDoc(doc(db, 'attendance', monthKey), { [key]: firestoreSafeData }, { merge: true });
     } catch (e) {
       console.error('Firestore 출석 기록 저장 실패:', e);
     }
   };
 
-  // 일괄 출석 처리 및 Firestore 전송
+  // 일괄 출석 처리 (undefined 방지 처리 완료)
   const handleBatchUpdateDay = async (
     dateStr: string,
     status: AttendanceStatus,
@@ -361,7 +376,7 @@ export default function App() {
     const now = new Date();
     const currentTimestamp = `${String(now.getHours()).padStart(2, '0')}:${String(now.getMinutes()).padStart(2, '0')}`;
     const updated = { ...records };
-    const changedBatch: Record<string, AttendanceRecord> = {};
+    const changedBatch: Record<string, any> = {};
 
     students
       .filter(st => st.active && !isStudentExcluded(st, session, dateStr) && (gradeFilter === undefined || st.grade === gradeFilter))
@@ -373,7 +388,7 @@ export default function App() {
           checkInTime: status !== 'NONE' ? (records[key]?.checkInTime || currentTimestamp) : undefined,
         };
         updated[key] = recordVal;
-        changedBatch[key] = recordVal;
+        changedBatch[key] = sanitizeForFirestore(recordVal);
       });
 
     setRecords(updated);
@@ -394,7 +409,7 @@ export default function App() {
     const currentTimestamp = `${String(now.getHours()).padStart(2, '0')}:${String(now.getMinutes()).padStart(2, '0')}`;
     const trackingKey = `${session}_${dateStr}_${gradeFilter ?? 'all'}`;
     const updated = { ...records };
-    const changedBatch: Record<string, AttendanceRecord> = {};
+    const changedBatch: Record<string, any> = {};
 
     const applicableStudents = students.filter(
       st => st.active && !isStudentExcluded(st, session, dateStr) && (gradeFilter === undefined || st.grade === gradeFilter)
@@ -417,7 +432,7 @@ export default function App() {
           checkInTime: currentTimestamp,
         };
         updated[key] = recVal;
-        changedBatch[key] = recVal;
+        changedBatch[key] = sanitizeForFirestore(recVal);
       });
       setLastFilledDayKeys(map => ({
         ...map,
@@ -434,7 +449,7 @@ export default function App() {
             checkInTime: undefined,
           };
           updated[key] = recVal;
-          changedBatch[key] = recVal;
+          changedBatch[key] = sanitizeForFirestore(recVal);
         }
       });
       setLastFilledDayKeys(map => {
